@@ -46,6 +46,9 @@ def split_stream(data):
         if data[soi:soi + 2] != b'\xff\xd8':
             raise ValueError(f'no JPEG SOI at offset {soi}')
         end = jpeg_end(data, soi)
+        declared = frame_meta(data[off:soi])['jpeg_len']
+        if end - soi != declared:
+            raise ValueError(f'JPEG is {end - soi} B but header says {declared}')
         tail = data[end:end + DEPTH_BYTES + TRAILER_BYTES]
         if len(tail) < DEPTH_BYTES + TRAILER_BYTES:
             break                                   # truncated last buffer
@@ -60,29 +63,78 @@ def depth_mm(depth_raw):
     return np.ascontiguousarray(np.rot90(stored, 3) >> 4)
 
 
-def intrinsics(prefix):
-    """(depth, colour) intrinsics as (fx, fy, cx, cy) tuples."""
-    f = np.frombuffer(prefix[:64], '<f4')
-    return tuple(map(float, f[2:6])), tuple(map(float, f[11:15]))
+def calibration(prefix):
+    """Static calibration from the prefix (docs/FRAME_FORMAT.md).
+
+    Returns a dict with depth/colour intrinsics as (fx, fy, cx, cy) and the
+    extrinsics R (3x3), t (mm) mapping P_colour = R @ P_depth + t.
+    """
+    f = np.frombuffer(prefix[:128], '<f4').astype(np.float64)
+    return {
+        'depth_K': tuple(f[2:6]),
+        'colour_K': tuple(f[11:15]),
+        'R': f[20:29].reshape(3, 3),
+        't': f[29:32].copy(),
+    }
+
+
+def frame_meta(prefix):
+    """Per-frame metadata: device timestamp (us) and JPEG length (bytes)."""
+    w = np.frombuffer(prefix, '<u4')
+    return {
+        'stamp_us': int(w[256]) | (int(w[257]) << 32),
+        'jpeg_len': int(w[268]),
+    }
+
+
+def register_to_colour(depth, calib):
+    """Reproject depth (mm, depth camera) into the colour camera's pixels.
+
+    Nearest-pixel forward projection with a z-buffer (nearest surface wins).
+    No distortion model: the calibration's distortion slots are all zero.
+    """
+    fxd, fyd, cxd, cyd = calib['depth_K']
+    fxc, fyc, cxc, cyc = calib['colour_K']
+    h, w = depth.shape
+    v, u = np.mgrid[0:h, 0:w]
+    valid = depth > 0
+    z = depth[valid].astype(np.float64)
+    pts = np.stack([(u[valid] - cxd) / fxd * z, (v[valid] - cyd) / fyd * z, z])
+    pc = calib['R'] @ pts + calib['t'][:, None]
+    uc = np.round(pc[0] / pc[2] * fxc + cxc).astype(int)
+    vc = np.round(pc[1] / pc[2] * fyc + cyc).astype(int)
+    ok = (pc[2] > 0) & (uc >= 0) & (uc < w) & (vc >= 0) & (vc < h)
+    out = np.full((h, w), np.inf)
+    np.minimum.at(out, (vc[ok], uc[ok]), pc[2][ok])
+    out[np.isinf(out)] = 0
+    return np.round(out).astype(np.uint16)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('stream', type=pathlib.Path)
     ap.add_argument('--out', type=pathlib.Path)
+    ap.add_argument('--register', action='store_true',
+                    help='also save depth registered to the colour camera')
     args = ap.parse_args()
     data = args.stream.read_bytes()
+    prev = None
     for n, (prefix, jpeg, raw, _trailer) in enumerate(split_stream(data)):
         d = depth_mm(raw)
         valid = d[d > 0]
-        (fxd, fyd, _, _), (fxc, fyc, _, _) = intrinsics(prefix)
+        cal, meta = calibration(prefix), frame_meta(prefix)
+        dt = '' if prev is None else f', dt {(meta["stamp_us"] - prev) / 1000:.1f} ms'
+        prev = meta['stamp_us']
         print(f'frame {n}: jpeg {len(jpeg)} B, depth valid '
               f'{valid.size / d.size:.0%}, median {int(np.median(valid))} mm, '
-              f'fx depth/colour {fxd:.1f}/{fxc:.1f}')
+              f'baseline {np.linalg.norm(cal["t"]):.2f} mm{dt}')
         if args.out:
             args.out.mkdir(parents=True, exist_ok=True)
             (args.out / f'{n:04d}.jpg').write_bytes(jpeg)
             np.save(args.out / f'{n:04d}_depth_mm.npy', d)
+            if args.register:
+                np.save(args.out / f'{n:04d}_depth_mm_registered.npy',
+                        register_to_colour(d, cal))
 
 
 if __name__ == '__main__':

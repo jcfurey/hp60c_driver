@@ -22,5 +22,11 @@ colour JPEG and 640x480 depth (`uint16 >> 4` = mm, stored rotated). This
 matches the vendor driver's published depth (correlation 0.978, median ratio
 1.0007). `tools/decode_frame.py` splits captured buffers.
 
-Next: decode the rest of the calibration block (extrinsics) for proper
-depth→colour registration, then the ROS 2 node.
+**Milestone 2 done: calibration decoded.** The prefix carries depth and colour
+intrinsics, the depth→colour extrinsics (`P_colour = R·P_depth + t`, 12 mm
+baseline) and per-frame device timestamps (the camera runs at ~24.8 fps).
+Registering with them matches the vendor's aligned depth to a median 7.6 mm,
+with 95% of pixels within 2%. `tools/decode_frame.py --register` does this.
+
+Next: the ROS 2 node (v4l2 capture → colour, depth, registered depth,
+CameraInfo, TF), portable across Jazzy, Kilted and Lyrical.

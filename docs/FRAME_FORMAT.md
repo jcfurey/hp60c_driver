@@ -21,7 +21,7 @@ composite of three parts. (Other composite sizes are not yet examined.)
 ## Buffer layout (640x642 MJPG)
 
 ```
-offset 0          2560 B   prefix      calibration block (see below)
+offset 0          2560 B   prefix      calibration + per-frame metadata (see below)
 offset 2560       ~17 KB   JPEG        colour, baseline JFIF-less JPEG, 640x480, YCbCr 4:2:2
 after JPEG EOI    614912 B tail        depth: 614400 B image + 512 B trailer
 ```
@@ -52,30 +52,77 @@ absolute error 18 mm.
 
 Mostly zero. Not yet decoded.
 
-### Prefix (2560 bytes): calibration
+### Prefix (2560 bytes)
 
-Read as little-endian `float32` from offset 0:
+Two regions: static calibration (bytes 0–1023) and per-frame metadata (bytes
+1024–2559). Verified across 15 frames from two capture sessions.
 
-| float index | value (this unit) | interpretation |
-|---|---|---|
-| 0–1 | garbage-looking | unknown (maybe a header/ID) |
-| 2–5 | 443.635, 443.320, 321.799, 238.200 | **depth** fx, fy, cx, cy |
-| 6–10 | 0 | (distortion?) |
-| 11–14 | 590.228, 589.842, 332.799, 232.275 | **colour** fx, fy, cx, cy |
+#### Calibration: bytes 0–1023, constant
+
+Little-endian 32-bit words:
+
+| word | type | value (this unit) | meaning |
+|---|---|---|---|
+| 0–1 | ? | `0x6dac62ce 0x6acc4ce8` | unknown, constant (not plausible floats; maybe an ID) |
+| 2–5 | f32 | 443.635, 443.320, 321.799, 238.200 | **depth** fx, fy, cx, cy (px) |
+| 6–10 | f32 | 0 | probably depth distortion (all zero) |
+| 11–14 | f32 | 590.229, 589.842, 332.799, 232.275 | **colour** fx, fy, cx, cy (px) |
+| 15–19 | f32 | 0 | probably colour distortion (all zero) |
+| 20–28 | f32 | ≈ identity, 2.31° roll | **R**, row-major 3x3 rotation |
+| 29–31 | f32 | −12.036, −0.254, −0.043 | **t**, millimetres (12.04 mm baseline) |
+| 32–33 | u32 | 90, 100 | unknown integers |
+| 34–255 | — | 0 | unused |
+
+R is a proper rotation (‖RRᵀ−I‖ < 6e-8, det = 1). Convention, established by
+testing all four candidates against the vendor's registered output:
+
+```
+P_colour = R · P_depth + t        (P in mm, camera frames, z forward)
+```
+
+Registering depth into the colour camera with this convention (no distortion,
+nearest pixel, z-buffer min) matches the vendor's `depth0/image_raw` with
+correlation 0.9978, median |error| 7.6 mm and 95.4% of pixels within 2%
+(99,422 pixels). The alternatives scored 13–32 mm; no registration scored 106 mm.
+The remaining error is consistent with vendor-side filtering: only 14% of
+pixels match to ≤1 mm. The frames also came from different moments.
 
 Intrinsics are per-unit calibration, so read them from each frame rather than
-hard-coding them. The remaining ~2.5 KB is undecoded. It likely holds the
-depth→colour extrinsics needed for proper registration.
+hard-coding them.
+
+#### Per-frame metadata: bytes 1024–2559
+
+Only bytes 1024–1135 change between frames. Among them, as little-endian u32
+words:
+
+| word | meaning | evidence |
+|---|---|---|
+| 256–257 | u64 timestamp, µs | steps of ~40,320 per frame |
+| 258–259 | u64 timestamp, µs | a second clock, ~6.9 ms later than 256 |
+| 268, 274 | **JPEG length in bytes** | equals the parsed JPEG size exactly, every frame |
+| 269, 275 | timestamp, ms | steps of 40 |
+| 270, 276 | copies of words 256 and 258 | |
+| 272 | timestamp, whole seconds | |
+| 273 | ? | changes rarely |
+| 278, 279, 283 | ? | vary per frame; 279 and 283 move together |
+
+The rest of words 280–639 (all except 283) is non-zero but constant, and doesn't
+look like floats. It's unknown.
+
+**Frame rate:** timestamps step by 40.3 ms, so the camera delivers **~24.8 fps**,
+not the 30 fps the UVC descriptor advertises. One frame in five was missing
+from a v4l2 capture (an 80.6 ms step).
 
 ## Open questions (next milestones)
 
-1. Meaning of the low 4 depth bits, the 512 B trailer and the rest of the prefix
-   (extrinsics, distortion).
-2. Proper depth→colour registration using those extrinsics, then compare
-   per-pixel against the vendor output again. The target is well under the
-   current 18 mm median error.
+1. Meaning of the low 4 depth bits. They are spatially correlated (mean neighbour
+   difference 3.3 vs ~5.3 for noise), which fits a 1/16 mm fraction. But the
+   vendor output is integer mm, so it can't confirm this: `raw/16` scored
+   7.47 mm vs 7.58 mm for `raw>>4`.
+2. The 512 B trailer, prefix words 0–1 and 32–33, and the constant block at
+   words 280–639.
 3. Whether the vendor applies filtering we want to match (it reports fewer
    near-range points: min 341 mm vs our 5th percentile ~540 mm raw).
-4. Frame rate: the vendor publishes depth at ~12 Hz. Check whether composites
-   really arrive at 30 fps and whether depth is fresh in every one.
+4. Frame rate: composites arrive at ~24.8 fps, but the vendor publishes depth at
+   ~12 Hz. Check whether depth is fresh in every composite or only every other one.
 5. The other composite sizes (320x564, 160x768).
