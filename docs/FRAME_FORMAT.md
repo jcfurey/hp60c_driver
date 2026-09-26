@@ -38,8 +38,17 @@ after JPEG EOI    614912 B tail        depth: 614400 B image + 512 B trailer
 - 480 wide x 640 tall, `uint16` little-endian. The image is stored **rotated**:
   `np.rot90(depth, 3)` gives the 640x480 landscape image in the colour
   camera's orientation.
-- **`depth_mm = value >> 4`**. The upper 12 bits are millimetres (max 4095). The
-  meaning of the low 4 bits (sub-mm fraction or flags) is **not yet known**.
+- **The value is depth in 1/16 mm** (max 4095.94 mm). Integer millimetres are
+  `(value + 8) >> 4`, rounded. Plain `>> 4` truncates, which biases everything
+  by −0.47 mm on average.
+
+  Evidence for the fraction (100 frames, static scene): the distinct raw
+  values in a narrow range sit on a ladder whose spacing grows as Z² (0.63 mm
+  at 1.02 m, 1.4 mm at 1.52 m, 3.8 mm at 2.53 m, 9.3 mm at 3.95 m, matching
+  (Z/1.02 m)² to within 3%). That is the signature of depth computed from
+  quantised disparity. It also explains why the low nibble is far from uniform
+  (χ²/dof ≈ 189,000) and sticky per pixel: values snap to rungs. It is not a
+  flag field.
 - `0` = no measurement (~39% of pixels in the test scene).
 
 Evidence: against the vendor node's published `depth0/image_raw` (16UC1, mm,
@@ -115,14 +124,17 @@ from a v4l2 capture (an 80.6 ms step).
 
 ## Open questions (next milestones)
 
-1. Meaning of the low 4 depth bits. They are spatially correlated (mean neighbour
-   difference 3.3 vs ~5.3 for noise), which fits a 1/16 mm fraction. But the
-   vendor output is integer mm, so it can't confirm this: `raw/16` scored
-   7.47 mm vs 7.58 mm for `raw>>4`.
+1. ~~Meaning of the low 4 depth bits~~: resolved. It's the 1/16 mm fraction
+   (see Depth).
 2. The 512 B trailer, prefix words 0–1 and 32–33, and the constant block at
    words 280–639.
 3. Whether the vendor applies filtering we want to match (it reports fewer
    near-range points: min 341 mm vs our 5th percentile ~540 mm raw).
-4. Frame rate: composites arrive at ~24.8 fps, but the vendor publishes depth at
-   ~12 Hz. Check whether depth is fresh in every composite or only every other one.
+4. ~~Frame rate~~: resolved. The sensor cycle is 40.3 ms (24.8 Hz), but the
+   camera sends 5 of every 6 cycles: the device timestamps show one 80.7 ms gap
+   exactly every 5 frames. The host loses nothing: `uvcvideo` stats over 100
+   frames show 0 errors, 0 invalid, 0 empty. Effective rate ~20.7 fps. Every
+   delivered frame is fresh (no repeated depth or JPEG payload in 99
+   consecutive pairs). On a static scene, per-pixel depth changes ~21 mm
+   between frames: that is raw sensor noise, relevant to filtering.
 5. The other composite sizes (320x564, 160x768).

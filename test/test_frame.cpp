@@ -139,13 +139,33 @@ TEST(Frame, DepthIsRotatedUprightAndShifted)
   const auto f = hp::parse_frame(b.data(), b.size());
   std::vector<std::uint16_t> mm(static_cast<std::size_t>(hp::kWidth) * hp::kHeight);
   hp::depth_to_mm(f.depth_raw, mm.data());
-  // upright (r, c) = stored (639 - c, r) >> 4, i.e. numpy np.rot90(stored, 3)
+  // upright (r, c) = round(stored (639 - c, r) / 16), i.e. numpy np.rot90(stored, 3)
   for (int r : {0, 1, 240, 479}) {
     for (int c : {0, 1, 320, 639}) {
-      EXPECT_EQ(mm[static_cast<std::size_t>(r) * hp::kWidth + c], stored_value(639 - c, r) >> 4)
+      EXPECT_EQ(
+        mm[static_cast<std::size_t>(r) * hp::kWidth + c], (stored_value(639 - c, r) + 8) >> 4)
         << "r=" << r << " c=" << c;
     }
   }
+}
+
+TEST(Frame, DepthRoundsSixteenthsToNearestMillimetre)
+{
+  // Raw depth is in 1/16 mm: 1000 mm + 7/16 rounds down, + 8/16 rounds up.
+  std::vector<std::uint8_t> raw(hp::kDepthBytes, 0);
+  auto put = [&raw](int stored_row, int stored_col, std::uint16_t v) {
+      const std::size_t s = static_cast<std::size_t>(stored_row) * 480 + stored_col;
+      raw[2 * s] = static_cast<std::uint8_t>(v & 0xFF);
+      raw[2 * s + 1] = static_cast<std::uint8_t>(v >> 8);
+    };
+  put(639, 0, 1000 * 16 + 7);    // upright (0, 0)
+  put(638, 0, 1000 * 16 + 8);    // upright (0, 1)
+  put(637, 0, 0xFFFF);           // upright (0, 2): top of range, must not wrap
+  std::vector<std::uint16_t> mm(static_cast<std::size_t>(hp::kWidth) * hp::kHeight);
+  hp::depth_to_mm(raw.data(), mm.data());
+  EXPECT_EQ(mm[0], 1000);
+  EXPECT_EQ(mm[1], 1001);
+  EXPECT_EQ(mm[2], 4096);
 }
 
 TEST(Frame, RegistrationWithIdentityIsNoOp)

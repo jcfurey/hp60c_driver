@@ -35,7 +35,7 @@ void check(cudaError_t e, const char * what)
 constexpr int kPixels = kWidth * kHeight;
 constexpr std::uint32_t kEmpty = 0xFFFFFFFFu;
 
-// upright (r, c) = stored (639 - c, r) >> 4; stored rows are 480 wide.
+// upright (r, c) = round(stored (639 - c, r) / 16); stored rows are 480 wide.
 __global__ void unpack_kernel(const std::uint8_t * raw, std::uint16_t * out)
 {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -45,8 +45,8 @@ __global__ void unpack_kernel(const std::uint8_t * raw, std::uint16_t * out)
   const int r = i / kWidth;
   const int c = i % kWidth;
   const int s = (kWidth - 1 - c) * kHeight + r;
-  const std::uint16_t v = static_cast<std::uint16_t>(raw[2 * s] | (raw[2 * s + 1] << 8));
-  out[i] = static_cast<std::uint16_t>(v >> 4);
+  const unsigned v = raw[2 * s] | (raw[2 * s + 1] << 8);   // 1/16 mm
+  out[i] = static_cast<std::uint16_t>((v + 8) >> 4);
 }
 
 struct Params

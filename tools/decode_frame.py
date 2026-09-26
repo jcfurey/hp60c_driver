@@ -73,9 +73,9 @@ def split_stream(data):
 
 
 def depth_mm(depth_raw):
-    """Return 640x480 uint16 depth in millimetres, 0 = no measurement."""
-    stored = np.frombuffer(depth_raw, '<u2').reshape(DEPTH_H, DEPTH_W)
-    return np.ascontiguousarray(np.rot90(stored, 3) >> 4)
+    """Return 640x480 uint16 depth in millimetres (rounded), 0 = no measurement."""
+    stored = np.frombuffer(depth_raw, '<u2').reshape(DEPTH_H, DEPTH_W).astype(np.uint32)
+    return np.ascontiguousarray((np.rot90(stored, 3) + 8) >> 4).astype(np.uint16)
 
 
 def calibration(prefix):

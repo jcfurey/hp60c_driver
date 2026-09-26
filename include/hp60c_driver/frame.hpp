@@ -73,7 +73,8 @@ FrameView parse_frame(const std::uint8_t * buf, std::size_t len);
 std::size_t jpeg_end(const std::uint8_t * buf, std::size_t len, std::size_t start);
 
 // Upright 640x480 depth in millimetres (0 = no measurement) from the stored
-// 480x640 raw block: out(r, c) = raw(639 - c, r) >> 4.
+// 480x640 raw block. Raw values are 1/16 mm; they are rounded to the nearest
+// mm: out(r, c) = (raw(639 - c, r) + 8) >> 4.
 void depth_to_mm(const std::uint8_t * depth_raw, std::uint16_t * out);
 
 // Reproject depth (mm, depth camera, 640x480) into the colour camera's pixels.

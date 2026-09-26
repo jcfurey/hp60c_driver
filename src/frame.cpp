@@ -128,8 +128,8 @@ void depth_to_mm(const std::uint8_t * depth_raw, std::uint16_t * out)
   for (int c = 0; c < kWidth; ++c) {
     const std::uint8_t * row = depth_raw + 2 * static_cast<std::size_t>(kWidth - 1 - c) * stored_w;
     for (int r = 0; r < kHeight; ++r) {
-      const std::uint16_t v = static_cast<std::uint16_t>(row[2 * r] | (row[2 * r + 1] << 8));
-      out[static_cast<std::size_t>(r) * kWidth + c] = static_cast<std::uint16_t>(v >> 4);
+      const unsigned v = row[2 * r] | (row[2 * r + 1] << 8);   // 1/16 mm
+      out[static_cast<std::size_t>(r) * kWidth + c] = static_cast<std::uint16_t>((v + 8) >> 4);
     }
   }
 }
