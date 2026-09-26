@@ -43,7 +43,13 @@ public:
     const std::uint8_t * depth_raw, const Calibration & calib,
     std::uint16_t * depth_mm_out, std::uint16_t * aligned_out);
 
+  // Register already-unpacked depth (640x480 mm, e.g. after filtering).
+  void register_mm(
+    const std::uint16_t * depth_mm, const Calibration & calib, std::uint16_t * aligned_out);
+
 private:
+  void splat_and_download(const Calibration & calib, std::uint16_t * aligned_out);
+
   std::uint8_t * d_raw_{nullptr};
   std::uint16_t * d_depth_{nullptr};
   std::uint32_t * d_zbuf_{nullptr};

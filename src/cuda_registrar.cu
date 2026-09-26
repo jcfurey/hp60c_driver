@@ -152,6 +152,28 @@ void CudaRegistrar::process(
   unpack_kernel<<<kGrid, kBlock>>>(d_raw_, d_depth_);
   check(cudaGetLastError(), "unpack_kernel");
   if (aligned_out) {
+    splat_and_download(calib, aligned_out);
+  }
+  if (depth_mm_out) {
+    check(
+      cudaMemcpy(
+        depth_mm_out, d_depth_, kPixels * sizeof(std::uint16_t),
+        cudaMemcpyDeviceToHost), "download depth");
+  }
+}
+
+void CudaRegistrar::register_mm(
+  const std::uint16_t * depth_mm, const Calibration & calib, std::uint16_t * aligned_out)
+{
+  check(
+    cudaMemcpy(d_depth_, depth_mm, kPixels * sizeof(std::uint16_t), cudaMemcpyHostToDevice),
+    "upload depth");
+  splat_and_download(calib, aligned_out);
+}
+
+void CudaRegistrar::splat_and_download(const Calibration & calib, std::uint16_t * aligned_out)
+{
+  {
     Params p{};
     for (int k = 0; k < 9; ++k) {
       p.R[k] = calib.R[k];
@@ -176,12 +198,6 @@ void CudaRegistrar::process(
       cudaMemcpy(
         aligned_out, d_aligned_, kPixels * sizeof(std::uint16_t),
         cudaMemcpyDeviceToHost), "download aligned");
-  }
-  if (depth_mm_out) {
-    check(
-      cudaMemcpy(
-        depth_mm_out, d_depth_, kPixels * sizeof(std::uint16_t),
-        cudaMemcpyDeviceToHost), "download depth");
   }
 }
 

@@ -44,7 +44,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
 # Format parsing: no ROS, so the unit tests need neither a camera nor rclcpp.
-add_library(hp60c_frame STATIC src/frame.cpp)
+add_library(hp60c_frame STATIC src/frame.cpp src/depth_filter.cpp)
 set_target_properties(hp60c_frame PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(hp60c_frame PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -88,6 +88,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_frame test/test_frame.cpp)
   target_link_libraries(test_frame hp60c_frame)
+  ament_add_gtest(test_depth_filter test/test_depth_filter.cpp)
+  target_link_libraries(test_depth_filter hp60c_frame)
   if(HP60C_CUDA)
     ament_add_gtest(test_cuda_registrar test/test_cuda_registrar.cpp)
     target_link_libraries(test_cuda_registrar hp60c_frame hp60c_cuda)

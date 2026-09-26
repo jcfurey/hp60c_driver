@@ -20,6 +20,8 @@
 //                                     JPEG passed through (no decode)
 //   depth/image_raw                   16UC1 mm, depth camera
 //   aligned_depth_to_color/image_raw  16UC1 mm, registered to the colour camera
+//   depth/image_filtered              the two depth streams again, noise-filtered
+//   aligned_depth_to_color/image_filtered  (temporal + spatial; filter.* params)
 //   */camera_info                     from the per-unit calibration in the stream
 //
 // plus a static TF colour optical frame -> depth optical frame.
@@ -37,6 +39,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "hp60c_driver/depth_filter.hpp"
 #include "hp60c_driver/frame.hpp"
 #ifdef HP60C_WITH_CUDA
 #include "hp60c_driver/cuda_registrar.hpp"
@@ -104,6 +107,9 @@ public:
     depth_info_pub_ = create_publisher<CameraInfo>("depth/camera_info", qos);
     aligned_pub_ = create_publisher<Image>("aligned_depth_to_color/image_raw", qos);
     aligned_info_pub_ = create_publisher<CameraInfo>("aligned_depth_to_color/camera_info", qos);
+    // Filtered depth sits beside the raw topic, sharing its camera_info.
+    depth_filtered_pub_ = create_publisher<Image>("depth/image_filtered", qos);
+    aligned_filtered_pub_ = create_publisher<Image>("aligned_depth_to_color/image_filtered", qos);
     tf_static_pub_ = create_publisher<tf2_msgs::msg::TFMessage>(
       "/tf_static", rclcpp::QoS(1).reliable().transient_local());
 
@@ -112,6 +118,15 @@ public:
       throw std::runtime_error("tjInitDecompress failed");
     }
     depth_mm_.resize(static_cast<std::size_t>(kWidth) * kHeight);
+    filtered_mm_.resize(depth_mm_.size());
+    DepthFilterParams fp;
+    filter_enabled_ = declare_parameter<bool>("filter.enabled", true);
+    fp.temporal = declare_parameter<bool>("filter.temporal", fp.temporal);
+    fp.alpha = declare_parameter<double>("filter.temporal_alpha", fp.alpha);
+    fp.reset_fraction = declare_parameter<double>("filter.temporal_reset_fraction",
+        fp.reset_fraction);
+    fp.spatial = declare_parameter<bool>("filter.spatial", fp.spatial);
+    filter_ = std::make_unique<DepthFilter>(kWidth, kHeight, fp);
     const bool use_cuda = declare_parameter<bool>("use_cuda", true);
 #ifdef HP60C_WITH_CUDA
     if (use_cuda) {
@@ -227,41 +242,66 @@ private:
     }
     publish_info(color_info_pub_, f.calib.colour, color_frame_, stamp);
 
-    const bool want_depth = depth_pub_->get_subscription_count() > 0;
-    const bool want_aligned = aligned_pub_->get_subscription_count() > 0;
-    std::unique_ptr<Image> depth_msg, aligned_msg;
-    if (want_depth) {
-      depth_msg = mono16(nullptr, depth_frame_, stamp);
+    DepthOut o;
+    o.depth = depth_pub_->get_subscription_count() > 0 ? mono16(depth_frame_, stamp) : nullptr;
+    o.aligned = aligned_pub_->get_subscription_count() > 0 ? mono16(color_frame_, stamp) : nullptr;
+    if (filter_enabled_) {
+      o.depth_f = depth_filtered_pub_->get_subscription_count() > 0 ?
+        mono16(depth_frame_, stamp) : nullptr;
+      o.aligned_f = aligned_filtered_pub_->get_subscription_count() > 0 ?
+        mono16(color_frame_, stamp) : nullptr;
     }
-    if (want_aligned) {
-      aligned_msg = mono16(nullptr, color_frame_, stamp);
+    if (o.depth || o.aligned || o.depth_f || o.aligned_f) {
+      compute_depth(f, o);
     }
-    auto * depth_out = depth_msg ? reinterpret_cast<std::uint16_t *>(depth_msg->data.data()) :
-      nullptr;
-    auto * aligned_out = aligned_msg ?
-      reinterpret_cast<std::uint16_t *>(aligned_msg->data.data()) : nullptr;
-    if (want_depth || want_aligned) {
-      compute_depth(f, depth_out, aligned_out);
+    if (o.depth) {
+      depth_pub_->publish(std::move(o.depth));
     }
-    if (depth_msg) {
-      depth_pub_->publish(std::move(depth_msg));
+    if (o.depth_f) {
+      depth_filtered_pub_->publish(std::move(o.depth_f));
     }
     publish_info(depth_info_pub_, f.calib.depth, depth_frame_, stamp);
-    if (aligned_msg) {
-      aligned_pub_->publish(std::move(aligned_msg));
+    if (o.aligned) {
+      aligned_pub_->publish(std::move(o.aligned));
+    }
+    if (o.aligned_f) {
+      aligned_filtered_pub_->publish(std::move(o.aligned_f));
     }
     publish_info(aligned_info_pub_, f.calib.colour, color_frame_, stamp);
   }
 
-  // Unpack (and optionally register) depth into the given 640x480 buffers,
-  // either of which may be null. CUDA when available, else the CPU; a CUDA
-  // failure mid-run drops back to the CPU for good rather than losing frames.
-  void compute_depth(const FrameView & f, std::uint16_t * depth_out, std::uint16_t * aligned_out)
+  struct DepthOut
   {
+    std::unique_ptr<Image> depth, aligned, depth_f, aligned_f;   // null = not wanted
+  };
+
+  static std::uint16_t * pixels(const std::unique_ptr<Image> & m)
+  {
+    return m ? reinterpret_cast<std::uint16_t *>(m->data.data()) : nullptr;
+  }
+
+  // Fill whichever outputs are wanted. Unpacking and registration run on CUDA
+  // when available, else on the CPU; a CUDA failure mid-run drops back to the
+  // CPU for good rather than losing frames. Filtering runs on the CPU.
+  void compute_depth(const FrameView & f, DepthOut & o)
+  {
+    const bool want_filtered = o.depth_f || o.aligned_f;
+    // Host-side unpacked depth, needed for filtering and for the CPU path.
+    std::uint16_t * mm = o.depth ? pixels(o.depth) : depth_mm_.data();
+    bool have_mm = false;
 #ifdef HP60C_WITH_CUDA
     if (cuda_) {
       try {
-        cuda_->process(f.depth_raw, f.calib, depth_out, aligned_out);
+        cuda_->process(
+          f.depth_raw, f.calib, (o.depth || want_filtered) ? mm : nullptr, pixels(o.aligned));
+        have_mm = o.depth || want_filtered;
+        if (o.aligned_f) {
+          run_filter(f, mm, o);
+          cuda_->register_mm(pixels(o.depth_f) ? pixels(o.depth_f) : filtered_mm_.data(),
+            f.calib, pixels(o.aligned_f));
+        } else if (o.depth_f) {
+          run_filter(f, mm, o);
+        }
         return;
       } catch (const std::exception & e) {
         RCLCPP_ERROR(get_logger(), "CUDA failed (%s); switching to the CPU path", e.what());
@@ -269,15 +309,35 @@ private:
       }
     }
 #endif
-    std::uint16_t * mm = depth_out ? depth_out : depth_mm_.data();
-    depth_to_mm(f.depth_raw, mm);
-    if (aligned_out) {
-      register_to_colour(mm, f.calib, aligned_out);
+    if (!have_mm) {
+      depth_to_mm(f.depth_raw, mm);
+    }
+    if (o.aligned) {
+      register_to_colour(mm, f.calib, pixels(o.aligned));
+    }
+    if (want_filtered) {
+      run_filter(f, mm, o);
+      if (o.aligned_f) {
+        register_to_colour(
+          pixels(o.depth_f) ? pixels(o.depth_f) : filtered_mm_.data(), f.calib,
+          pixels(o.aligned_f));
+      }
     }
   }
 
-  std::unique_ptr<Image> mono16(
-    const std::uint16_t * src, const std::string & frame, const rclcpp::Time & stamp)
+  // Filter mm into depth_f (or scratch). The temporal stage needs consecutive
+  // frames, so its history is dropped when the device timestamps show a gap
+  // longer than the camera's own cadence (one skipped cycle is ~81 ms).
+  void run_filter(const FrameView & f, const std::uint16_t * mm, DepthOut & o)
+  {
+    if (last_filtered_us_ == 0 || f.device_stamp_us - last_filtered_us_ > 150000) {
+      filter_->reset();
+    }
+    last_filtered_us_ = f.device_stamp_us;
+    filter_->apply(mm, o.depth_f ? pixels(o.depth_f) : filtered_mm_.data());
+  }
+
+  std::unique_ptr<Image> mono16(const std::string & frame, const rclcpp::Time & stamp)
   {
     auto msg = std::make_unique<Image>();
     msg->header.stamp = stamp;
@@ -288,9 +348,6 @@ private:
     msg->is_bigendian = 0;
     msg->step = kWidth * 2;
     msg->data.resize(static_cast<std::size_t>(msg->step) * kHeight);
-    if (src) {
-      std::memcpy(msg->data.data(), src, msg->data.size());
-    }
     return msg;
   }
 
@@ -338,12 +395,16 @@ private:
   const bool publish_tf_;
 
   rclcpp::Publisher<Image>::SharedPtr color_pub_, depth_pub_, aligned_pub_;
+  rclcpp::Publisher<Image>::SharedPtr depth_filtered_pub_, aligned_filtered_pub_;
   rclcpp::Publisher<CompressedImage>::SharedPtr color_jpeg_pub_;
   rclcpp::Publisher<CameraInfo>::SharedPtr color_info_pub_, depth_info_pub_, aligned_info_pub_;
   rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_pub_;
 
   tjhandle tj_{nullptr};
-  std::vector<std::uint16_t> depth_mm_;
+  std::vector<std::uint16_t> depth_mm_, filtered_mm_;
+  bool filter_enabled_{true};
+  std::unique_ptr<DepthFilter> filter_;
+  std::uint64_t last_filtered_us_{0};
 #ifdef HP60C_WITH_CUDA
   std::unique_ptr<CudaRegistrar> cuda_;
 #endif

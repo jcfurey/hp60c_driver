@@ -32,6 +32,8 @@ Topics, each computed only while someone subscribes:
 | `color/image_raw/compressed` | CompressedImage `jpeg` | the camera's own JPEG, passed through with no decode |
 | `depth/image_raw` | Image `16UC1`, mm | depth camera frame |
 | `aligned_depth_to_color/image_raw` | Image `16UC1`, mm | registered to the colour camera |
+| `depth/image_filtered` | Image `16UC1`, mm | `depth/image_raw`, noise-filtered |
+| `aligned_depth_to_color/image_filtered` | Image `16UC1`, mm | filtered, then registered |
 | `*/camera_info` | CameraInfo | from the per-unit calibration in the stream |
 | `/tf_static` | | `hp60c_color_optical_frame` → `hp60c_depth_optical_frame` |
 
@@ -39,6 +41,15 @@ Parameters: `device` (empty = find the camera by USB id), `color_frame_id`,
 `depth_frame_id`, `publish_tf`, `best_effort` (default `false`: images are
 reliable, which serves both reliable and best-effort subscribers), and `use_cuda`
 (default `true`).
+
+**Depth filtering (on by default; raw always published too).** Raw depth jitters
+~19 mm frame to frame on a static scene. The `*/image_filtered` topics apply a
+per-pixel temporal average, which resets instantly when a pixel changes by more
+than `filter.temporal_reset_fraction` (3%) so motion doesn't smear, followed by
+a 3x3 median over valid neighbours. They never fill holes or invent depth.
+Parameters: `filter.enabled`, `filter.temporal`, `filter.temporal_alpha` (0.4),
+`filter.temporal_reset_fraction` (0.03), `filter.spatial`. The `*/image_raw`
+topics are untouched, for consumers that do their own filtering.
 
 **CUDA backend (optional).** Where a CUDA compiler is found at build time (e.g.
 JetPack's `/usr/local/cuda`), depth unpacking and registration can run on the
@@ -62,6 +73,8 @@ re-plug the camera or re-authorize its USB device.
 | CPU, nothing subscribed | 0.3% of a core | 0% |
 | CPU, colour + depth + aligned + JPEG | 32% of a core | ~50% (RGB + depth only) |
 | Aligned depth vs vendor | correlation 0.999, median 5 mm, 99% within 2%, 58% vs 56% coverage | — |
+| Depth noise, static scene (per-pixel temporal std, median) | raw 18.5 mm → filtered 8.7 mm, same coverage | — |
+| CPU, filtered aligned depth only (the default consumer) | 35% of a core (filter itself: 2.2 ms/frame) | — |
 
 The camera itself emits ~24.8 fps. About 1 frame in 5 is lost below the driver
 (plain `v4l2-ctl` shows the same drops).

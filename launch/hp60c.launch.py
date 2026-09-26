@@ -32,6 +32,8 @@ def generate_launch_description():
         DeclareLaunchArgument('publish_tf', default_value='true'),
         DeclareLaunchArgument('best_effort', default_value='false'),
         DeclareLaunchArgument('use_cuda', default_value='true'),
+        DeclareLaunchArgument('filter', default_value='true',
+                              description='Publish */image_filtered depth too'),
     ]
     container = ComposableNodeContainer(
         name='hp60c_container',
@@ -51,6 +53,7 @@ def generate_launch_description():
                     'publish_tf': LaunchConfiguration('publish_tf'),
                     'best_effort': LaunchConfiguration('best_effort'),
                     'use_cuda': LaunchConfiguration('use_cuda'),
+                    'filter.enabled': LaunchConfiguration('filter'),
                 }],
                 extra_arguments=[{'use_intra_process_comms': True}],
             ),
