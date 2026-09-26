@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Split HP60C 640x642 composite MJPG buffers into colour, depth and calibration.
+# Copyright 2026 jcfurey
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Split HP60C 640x642 composite MJPG buffers into colour, depth and calibration.
 
 Written from docs/FRAME_FORMAT.md. Input is a raw stream as written by
 `v4l2-ctl --stream-to` (buffers back to back):
@@ -58,13 +73,14 @@ def split_stream(data):
 
 
 def depth_mm(depth_raw):
-    """640x480 uint16 depth in millimetres, 0 = no measurement."""
+    """Return 640x480 uint16 depth in millimetres, 0 = no measurement."""
     stored = np.frombuffer(depth_raw, '<u2').reshape(DEPTH_H, DEPTH_W)
     return np.ascontiguousarray(np.rot90(stored, 3) >> 4)
 
 
 def calibration(prefix):
-    """Static calibration from the prefix (docs/FRAME_FORMAT.md).
+    """
+    Read the static calibration from the prefix (docs/FRAME_FORMAT.md).
 
     Returns a dict with depth/colour intrinsics as (fx, fy, cx, cy) and the
     extrinsics R (3x3), t (mm) mapping P_colour = R @ P_depth + t.
@@ -79,7 +95,7 @@ def calibration(prefix):
 
 
 def frame_meta(prefix):
-    """Per-frame metadata: device timestamp (us) and JPEG length (bytes)."""
+    """Return per-frame metadata: device timestamp (us) and JPEG length (bytes)."""
     w = np.frombuffer(prefix, '<u4')
     return {
         'stamp_us': int(w[256]) | (int(w[257]) << 32),
@@ -88,7 +104,8 @@ def frame_meta(prefix):
 
 
 def register_to_colour(depth, calib):
-    """Reproject depth (mm, depth camera) into the colour camera's pixels.
+    """
+    Reproject depth (mm, depth camera) into the colour camera's pixels.
 
     Nearest-pixel forward projection with a z-buffer (nearest surface wins).
     No distortion model: the calibration's distortion slots are all zero.

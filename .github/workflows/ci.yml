@@ -1,0 +1,48 @@
+# Build and test on every ROS 2 distro this driver targets. x86 runners are
+# fine: what is checked is ROS API / toolchain portability (Lyrical ships
+# CMake 4), not the Jetson hardware path.
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [jazzy, kilted, lyrical]
+    container: ros:${{ matrix.distro }}-ros-base
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src/hp60c_driver
+
+      - name: Install dependencies (from package.xml)
+        run: |
+          apt-get update
+          rosdep update --rosdistro ${{ matrix.distro }} || true
+          rosdep install -y --from-paths src --ignore-src --rosdistro ${{ matrix.distro }}
+
+      - name: colcon build
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: colcon test
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose
