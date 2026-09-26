@@ -56,10 +56,17 @@ JetPack's `/usr/local/cuda`), depth unpacking and registration can run on the
 GPU. If no GPU is usable at runtime, the node logs it and uses the CPU path, and
 it falls back the same way if CUDA fails mid-run. The CUDA results are tested
 against the CPU path (`test/test_cuda_registrar.cpp`: unpacking identical,
-registration within 1 mm at <0.1% of pixels). That passed on an RTX 5090. Its
-*speed-up on the Orin is not yet measured*: on the development unit the GPU
-currently fails to power on (nvgpu `ACR bootstrap failed`), so there the node runs
-on the CPU.
+registration within 1 mm at <0.1% of pixels). It passes on the Orin Nano's GPU
+and on an RTX 5090. Measured on the Orin (percent of one core):
+
+| subscribed | CPU path | CUDA |
+|---|---|---|
+| filtered aligned depth | 34.5% | **15.2%** |
+| raw aligned depth | 23.6% | **3.5%** |
+| colour + depth + both aligned | 56.2% | **31.8%** |
+
+If the GPU is unavailable (the dev unit's once failed to power on with nvgpu
+`ACR bootstrap failed`), the node says so and runs everything on the CPU.
 
 The node needs the camera bound to the kernel's `uvcvideo` driver. The vendor
 SDK detaches that. If `/dev/video*` is missing after the vendor driver ran,
@@ -87,9 +94,8 @@ The camera itself emits ~24.8 fps. About 1 frame in 5 is lost below the driver
 - **Milestone 3: ROS 2 node** built and tested on hardware as above. It builds and
   passes its tests on Jazzy, Kilted and Lyrical.
 
-- **CUDA backend** for depth unpacking + registration: verified correct on an RTX
-  5090; Orin speed-up pending a working GPU on the dev unit.
+- **CUDA backend** for depth unpacking + registration: verified on the Orin Nano
+  and an RTX 5090; roughly halves the node's CPU on the Orin.
 
-Next: measure CUDA on the Orin; resolve the low 4 depth bits; decide whether to
-match the vendor's depth filtering. JPEG decode stays on the CPU: the Orin Nano
+Next: move the depth filter onto the GPU too. JPEG decode stays on the CPU: the Orin Nano
 has no hardware JPEG engine, and nvJPEG would still Huffman-decode on the CPU.
