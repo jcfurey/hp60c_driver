@@ -1,0 +1,6 @@
+# raw captures are images of real rooms: never commit them
+*.mjpg
+*.npy
+captures/
+frames/
+__pycache__/

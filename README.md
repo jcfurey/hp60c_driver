@@ -16,5 +16,11 @@ and the written specification in `docs/`. Interoperability research notes live i
 
 ## Status
 
-Milestone 1: determine the composite frame layout (where depth sits in the
-640x642 stream and how it is encoded) from raw v4l2 captures.
+**Milestone 1 done: frame format decoded** (`docs/FRAME_FORMAT.md`). The camera
+is plain UVC. Each 640x642 MJPG buffer carries a calibration prefix, a 640x480
+colour JPEG and 640x480 depth (`uint16 >> 4` = mm, stored rotated). This
+matches the vendor driver's published depth (correlation 0.978, median ratio
+1.0007). `tools/decode_frame.py` splits captured buffers.
+
+Next: decode the rest of the calibration block (extrinsics) for proper
+depth→colour registration, then the ROS 2 node.
