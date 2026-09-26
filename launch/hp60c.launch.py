@@ -31,6 +31,7 @@ def generate_launch_description():
         DeclareLaunchArgument('depth_frame_id', default_value='hp60c_depth_optical_frame'),
         DeclareLaunchArgument('publish_tf', default_value='true'),
         DeclareLaunchArgument('best_effort', default_value='false'),
+        DeclareLaunchArgument('use_cuda', default_value='true'),
     ]
     container = ComposableNodeContainer(
         name='hp60c_container',
@@ -49,6 +50,7 @@ def generate_launch_description():
                     'depth_frame_id': LaunchConfiguration('depth_frame_id'),
                     'publish_tf': LaunchConfiguration('publish_tf'),
                     'best_effort': LaunchConfiguration('best_effort'),
+                    'use_cuda': LaunchConfiguration('use_cuda'),
                 }],
                 extra_arguments=[{'use_intra_process_comms': True}],
             ),

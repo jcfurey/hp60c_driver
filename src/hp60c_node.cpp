@@ -38,6 +38,9 @@
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "hp60c_driver/frame.hpp"
+#ifdef HP60C_WITH_CUDA
+#include "hp60c_driver/cuda_registrar.hpp"
+#endif
 #include "hp60c_driver/v4l2_capture.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
@@ -109,6 +112,21 @@ public:
       throw std::runtime_error("tjInitDecompress failed");
     }
     depth_mm_.resize(static_cast<std::size_t>(kWidth) * kHeight);
+    const bool use_cuda = declare_parameter<bool>("use_cuda", true);
+#ifdef HP60C_WITH_CUDA
+    if (use_cuda) {
+      try {
+        cuda_ = std::make_unique<CudaRegistrar>();
+        RCLCPP_INFO(get_logger(), "Depth unpacking and registration on CUDA");
+      } catch (const std::exception & e) {
+        RCLCPP_WARN(get_logger(), "CUDA unavailable (%s); using the CPU path", e.what());
+      }
+    }
+#else
+    if (use_cuda) {
+      RCLCPP_INFO(get_logger(), "Built without CUDA; depth registration runs on the CPU");
+    }
+#endif
     worker_ = std::thread([this] {run();});
   }
 
@@ -211,20 +229,51 @@ private:
 
     const bool want_depth = depth_pub_->get_subscription_count() > 0;
     const bool want_aligned = aligned_pub_->get_subscription_count() > 0;
-    if (want_depth || want_aligned) {
-      depth_to_mm(f.depth_raw, depth_mm_.data());
-    }
+    std::unique_ptr<Image> depth_msg, aligned_msg;
     if (want_depth) {
-      depth_pub_->publish(mono16(depth_mm_.data(), depth_frame_, stamp));
+      depth_msg = mono16(nullptr, depth_frame_, stamp);
+    }
+    if (want_aligned) {
+      aligned_msg = mono16(nullptr, color_frame_, stamp);
+    }
+    auto * depth_out = depth_msg ? reinterpret_cast<std::uint16_t *>(depth_msg->data.data()) :
+      nullptr;
+    auto * aligned_out = aligned_msg ?
+      reinterpret_cast<std::uint16_t *>(aligned_msg->data.data()) : nullptr;
+    if (want_depth || want_aligned) {
+      compute_depth(f, depth_out, aligned_out);
+    }
+    if (depth_msg) {
+      depth_pub_->publish(std::move(depth_msg));
     }
     publish_info(depth_info_pub_, f.calib.depth, depth_frame_, stamp);
-    if (want_aligned) {
-      auto msg = mono16(nullptr, color_frame_, stamp);
-      register_to_colour(
-        depth_mm_.data(), f.calib, reinterpret_cast<std::uint16_t *>(msg->data.data()));
-      aligned_pub_->publish(std::move(msg));
+    if (aligned_msg) {
+      aligned_pub_->publish(std::move(aligned_msg));
     }
     publish_info(aligned_info_pub_, f.calib.colour, color_frame_, stamp);
+  }
+
+  // Unpack (and optionally register) depth into the given 640x480 buffers,
+  // either of which may be null. CUDA when available, else the CPU; a CUDA
+  // failure mid-run drops back to the CPU for good rather than losing frames.
+  void compute_depth(const FrameView & f, std::uint16_t * depth_out, std::uint16_t * aligned_out)
+  {
+#ifdef HP60C_WITH_CUDA
+    if (cuda_) {
+      try {
+        cuda_->process(f.depth_raw, f.calib, depth_out, aligned_out);
+        return;
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(get_logger(), "CUDA failed (%s); switching to the CPU path", e.what());
+        cuda_.reset();
+      }
+    }
+#endif
+    std::uint16_t * mm = depth_out ? depth_out : depth_mm_.data();
+    depth_to_mm(f.depth_raw, mm);
+    if (aligned_out) {
+      register_to_colour(mm, f.calib, aligned_out);
+    }
   }
 
   std::unique_ptr<Image> mono16(
@@ -295,6 +344,9 @@ private:
 
   tjhandle tj_{nullptr};
   std::vector<std::uint16_t> depth_mm_;
+#ifdef HP60C_WITH_CUDA
+  std::unique_ptr<CudaRegistrar> cuda_;
+#endif
   bool tf_sent_{false};
   std::atomic<bool> stop_{false};
   std::thread worker_;

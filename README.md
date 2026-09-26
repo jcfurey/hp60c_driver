@@ -36,8 +36,19 @@ Topics, each computed only while someone subscribes:
 | `/tf_static` | | `hp60c_color_optical_frame` → `hp60c_depth_optical_frame` |
 
 Parameters: `device` (empty = find the camera by USB id), `color_frame_id`,
-`depth_frame_id`, `publish_tf`, and `best_effort` (default `false`: images are
-reliable, which serves both reliable and best-effort subscribers).
+`depth_frame_id`, `publish_tf`, `best_effort` (default `false`: images are
+reliable, which serves both reliable and best-effort subscribers), and `use_cuda`
+(default `true`).
+
+**CUDA backend (optional).** Where a CUDA compiler is found at build time (e.g.
+JetPack's `/usr/local/cuda`), depth unpacking and registration can run on the
+GPU. If no GPU is usable at runtime, the node logs it and uses the CPU path, and
+it falls back the same way if CUDA fails mid-run. The CUDA results are tested
+against the CPU path (`test/test_cuda_registrar.cpp`: unpacking identical,
+registration within 1 mm at <0.1% of pixels). That passed on an RTX 5090. Its
+*speed-up on the Orin is not yet measured*: on the development unit the GPU
+currently fails to power on (nvgpu `ACR bootstrap failed`), so there the node runs
+on the CPU.
 
 The node needs the camera bound to the kernel's `uvcvideo` driver. The vendor
 SDK detaches that. If `/dev/video*` is missing after the vendor driver ran,
@@ -63,5 +74,9 @@ The camera itself emits ~24.8 fps. About 1 frame in 5 is lost below the driver
 - **Milestone 3: ROS 2 node** built and tested on hardware as above. It builds and
   passes its tests on Jazzy, Kilted and Lyrical.
 
-Next: move JPEG decode and registration to the GPU; resolve the low 4 depth
-bits; decide whether to match the vendor's depth filtering.
+- **CUDA backend** for depth unpacking + registration: verified correct on an RTX
+  5090; Orin speed-up pending a working GPU on the dev unit.
+
+Next: measure CUDA on the Orin; resolve the low 4 depth bits; decide whether to
+match the vendor's depth filtering. JPEG decode stays on the CPU: the Orin Nano
+has no hardware JPEG engine, and nvJPEG would still Huffman-decode on the CPU.
