@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Minimal V4L2 streaming capture (mmap buffers) for the HP60C's composite
-// 640x642 MJPG mode. Plain kernel uvcvideo: no libusb, no vendor library.
+// 640x642 MJPG mode, plus the camera's UVC controls. Plain kernel uvcvideo: no
+// libusb, no vendor library.
 
 #ifndef HP60C_DRIVER__V4L2_CAPTURE_HPP_
 #define HP60C_DRIVER__V4L2_CAPTURE_HPP_
@@ -24,6 +25,8 @@
 #include <string>
 #include <vector>
 
+#include "hp60c_driver/camera_controls.hpp"
+
 namespace hp60c_driver
 {
 
@@ -31,6 +34,20 @@ namespace hp60c_driver
 // if none. A missing node usually means another driver detached uvcvideo from
 // the camera (the vendor SDK does this); re-enumerating the USB device fixes it.
 std::string find_video_device(std::uint16_t vid, std::uint16_t pid);
+
+// One dequeued buffer. `data` is only valid inside the grab() callback.
+struct CapturedFrame
+{
+  const std::uint8_t * data{nullptr};
+  std::size_t size{0};
+  // When uvcvideo saw the frame start, on CLOCK_MONOTONIC (refined from the
+  // camera's own clock where it sends one), or -1 if the driver gave no
+  // monotonic timestamp.
+  std::int64_t monotonic_ns{-1};
+  // uvcvideo's frame counter. It counts every frame the camera sent, so a gap
+  // means frames were lost on the host.
+  std::uint32_t sequence{0};
+};
 
 class V4l2Capture
 {
@@ -40,9 +57,16 @@ public:
   V4l2Capture(const V4l2Capture &) = delete;
   V4l2Capture & operator=(const V4l2Capture &) = delete;
 
-  // Wait up to timeout_ms for a buffer; if one arrives, call fn(data, bytesused)
-  // and hand the buffer back to the driver. Returns false on timeout.
-  bool grab(int timeout_ms, const std::function<void(const std::uint8_t *, std::size_t)> & fn);
+  // Wait up to timeout_ms for a buffer; if one arrives, call fn with it and
+  // hand the buffer back to the driver. Returns false on timeout.
+  bool grab(int timeout_ms, const std::function<void(const CapturedFrame &)> & fn);
+
+  // The device's controls, skipping disabled ones and class headings.
+  std::vector<ControlInfo> query_controls() const;
+  // Current value of a control. Throws std::system_error on failure.
+  std::int64_t get_control(std::uint32_t id) const;
+  // Throws std::system_error on failure (e.g. EACCES while an auto mode owns it).
+  void set_control(std::uint32_t id, std::int64_t value);
 
 private:
   void cleanup();

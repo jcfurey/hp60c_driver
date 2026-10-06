@@ -236,3 +236,13 @@ TEST(Frame, QuaternionFromRotation)
   EXPECT_NEAR(q[2], std::sin(a / 2), 1e-12);
   EXPECT_NEAR(q[3], std::cos(a / 2), 1e-12);
 }
+
+TEST(Frame, QuaternionHasNonNegativeW)
+{
+  // The camera body -> optical frame rotation; Shepperd's last branch yields -q.
+  const auto q = hp::rotation_to_quaternion({0, 0, 1, -1, 0, 0, 0, -1, 0});
+  EXPECT_NEAR(q[0], -0.5, 1e-12);
+  EXPECT_NEAR(q[1], 0.5, 1e-12);
+  EXPECT_NEAR(q[2], -0.5, 1e-12);
+  EXPECT_NEAR(q[3], 0.5, 1e-12);
+}

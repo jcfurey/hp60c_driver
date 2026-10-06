@@ -238,7 +238,8 @@ std::array<double, 4> rotation_to_quaternion(const std::array<double, 9> & m)
     y = (m[5] + m[7]) / s;
     z = 0.25 * s;
   }
-  const double norm = std::sqrt(x * x + y * y + z * z + w * w);
+  // q and -q are the same rotation; return the one with w >= 0.
+  const double norm = std::copysign(std::sqrt(x * x + y * y + z * z + w * w), w);
   return {x / norm, y / norm, z / norm, w / norm};
 }
 

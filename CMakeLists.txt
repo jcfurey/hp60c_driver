@@ -37,14 +37,22 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(diagnostic_updater REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
-# Format parsing: no ROS, so the unit tests need neither a camera nor rclcpp.
-add_library(hp60c_frame STATIC src/frame.cpp src/depth_filter.cpp)
+# Format parsing, depth filtering, camera-control logic and software auto
+# exposure: no ROS, so their unit tests need neither a camera nor rclcpp.
+add_library(hp60c_frame STATIC
+  src/frame.cpp
+  src/depth_filter.cpp
+  src/camera_controls.cpp
+  src/auto_exposure.cpp)
 set_target_properties(hp60c_frame PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(hp60c_frame PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -66,9 +74,12 @@ target_link_libraries(hp60c_component
   hp60c_frame
   rclcpp::rclcpp
   rclcpp_components::component
+  ${rcl_interfaces_TARGETS}
   ${sensor_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${tf2_msgs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  diagnostic_updater::diagnostic_updater
   PkgConfig::TURBOJPEG)
 if(HP60C_CUDA)
   target_link_libraries(hp60c_component hp60c_cuda)
@@ -82,7 +93,7 @@ install(TARGETS hp60c_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -90,6 +101,14 @@ if(BUILD_TESTING)
   target_link_libraries(test_frame hp60c_frame)
   ament_add_gtest(test_depth_filter test/test_depth_filter.cpp)
   target_link_libraries(test_depth_filter hp60c_frame)
+  ament_add_gtest(test_camera_controls test/test_camera_controls.cpp)
+  target_link_libraries(test_camera_controls hp60c_frame)
+  ament_add_gtest(test_auto_exposure test/test_auto_exposure.cpp)
+  target_link_libraries(test_auto_exposure hp60c_frame)
+  # The node itself, in-process and without a camera: parameters, their
+  # validation, diagnostics and a clean shutdown.
+  ament_add_gtest(test_node test/test_node.cpp TIMEOUT 120)
+  target_link_libraries(test_node hp60c_component)
   if(HP60C_CUDA)
     ament_add_gtest(test_cuda_registrar test/test_cuda_registrar.cpp)
     target_link_libraries(test_cuda_registrar hp60c_frame hp60c_cuda)
