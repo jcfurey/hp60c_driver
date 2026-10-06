@@ -83,7 +83,7 @@ void depth_to_mm(const std::uint8_t * depth_raw, std::uint16_t * out);
 void register_to_colour(
   const std::uint16_t * depth_mm, const Calibration & calib, std::uint16_t * out);
 
-// Unit quaternion (x, y, z, w) of a row-major rotation matrix.
+// Unit quaternion (x, y, z, w), w >= 0, of a row-major rotation matrix.
 std::array<double, 4> rotation_to_quaternion(const std::array<double, 9> & R);
 
 }  // namespace hp60c_driver

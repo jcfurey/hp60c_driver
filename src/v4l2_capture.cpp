@@ -27,7 +27,10 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace hp60c_driver
 {
@@ -188,8 +191,7 @@ void V4l2Capture::cleanup()
   fd_ = -1;
 }
 
-bool V4l2Capture::grab(
-  int timeout_ms, const std::function<void(const std::uint8_t *, std::size_t)> & fn)
+bool V4l2Capture::grab(int timeout_ms, const std::function<void(const CapturedFrame &)> & fn)
 {
   pollfd pfd{fd_, POLLIN, 0};
   const int r = poll(&pfd, 1, timeout_ms);
@@ -217,8 +219,74 @@ bool V4l2Capture::grab(
     v4l2_buffer * b;
     ~Requeue() {xioctl(fd, VIDIOC_QBUF, b);}
   } requeue{fd_, &b};
-  fn(static_cast<const std::uint8_t *>(buffers_[b.index].start), b.bytesused);
+  CapturedFrame f;
+  f.data = static_cast<const std::uint8_t *>(buffers_[b.index].start);
+  f.size = b.bytesused;
+  if ((b.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC) {
+    f.monotonic_ns = static_cast<std::int64_t>(b.timestamp.tv_sec) * 1000000000 +
+      static_cast<std::int64_t>(b.timestamp.tv_usec) * 1000;
+  }
+  f.sequence = b.sequence;
+  fn(f);
   return true;
+}
+
+std::vector<ControlInfo> V4l2Capture::query_controls() const
+{
+  std::vector<ControlInfo> out;
+  v4l2_query_ext_ctrl q{};
+  q.id = V4L2_CTRL_FLAG_NEXT_CTRL;
+  while (xioctl(fd_, VIDIOC_QUERY_EXT_CTRL, &q) == 0) {
+    if (!(q.flags & V4L2_CTRL_FLAG_DISABLED) && q.type != V4L2_CTRL_TYPE_CTRL_CLASS) {
+      ControlInfo c;
+      c.id = q.id;
+      c.name = std::string(q.name, strnlen(q.name, sizeof q.name));
+      c.type = q.type;
+      c.minimum = q.minimum;
+      c.maximum = q.maximum;
+      c.step = q.step;
+      c.default_value = q.default_value;
+      c.flags = q.flags;
+      if (c.is_menu()) {
+        for (std::int64_t i = q.minimum; i <= q.maximum; ++i) {
+          v4l2_querymenu m{};
+          m.id = q.id;
+          m.index = static_cast<__u32>(i);
+          if (xioctl(fd_, VIDIOC_QUERYMENU, &m) == 0) {   // menus may have gaps
+            c.menu.emplace_back(
+              i, q.type == V4L2_CTRL_TYPE_MENU ?
+              std::string(
+                reinterpret_cast<const char *>(m.name),
+                strnlen(reinterpret_cast<const char *>(m.name), sizeof m.name)) :
+              std::to_string(m.value));
+          }
+        }
+      }
+      out.push_back(std::move(c));
+    }
+    q.id |= V4L2_CTRL_FLAG_NEXT_CTRL;
+  }
+  return out;
+}
+
+std::int64_t V4l2Capture::get_control(std::uint32_t id) const
+{
+  v4l2_control c{};
+  c.id = id;
+  if (xioctl(fd_, VIDIOC_G_CTRL, &c) < 0) {
+    fail("VIDIOC_G_CTRL");
+  }
+  return c.value;
+}
+
+void V4l2Capture::set_control(std::uint32_t id, std::int64_t value)
+{
+  v4l2_control c{};
+  c.id = id;
+  c.value = static_cast<__s32>(value);
+  if (xioctl(fd_, VIDIOC_S_CTRL, &c) < 0) {
+    fail("VIDIOC_S_CTRL");
+  }
 }
 
 }  // namespace hp60c_driver

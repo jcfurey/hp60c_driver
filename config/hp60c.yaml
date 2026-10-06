@@ -1,0 +1,45 @@
+# HP60C driver settings, loaded by launch/hp60c.launch.py (params_file:=...).
+# `/**` matches the node whatever namespace or name the launch gives it.
+# Launch arguments (device, frame ids, publish_tf, best_effort, use_cuda,
+# filter) are set by the launch file and override this file.
+#
+# Everything here can also be changed at runtime:
+#   ros2 param set /hp60c/hp60c color.exposure_mode software
+#   ros2 param describe /hp60c/hp60c color.gain      # ranges, once connected
+/**:
+  ros__parameters:
+    filter:
+      temporal: true
+      temporal_alpha: 0.4             # weight of the newest frame
+      temporal_reset_fraction: 0.03   # restart a pixel's average past this change
+      spatial: true
+
+    color:
+      # auto:     the camera's own auto exposure (the camera's default)
+      # manual:   color.exposure_us and color.gain as set below
+      # software: the driver's auto exposure + auto gain, within these limits
+      exposure_mode: auto
+      software_ae:
+        target_brightness: 110.0      # mean luma, 0-255
+        tolerance: 0.1                # no change within +-10% of the target
+        min_exposure_us: 0            # 0: the camera's minimum
+        max_exposure_us: 30000        # bounds motion blur; frame period is ~40 ms
+        min_gain: -1                  # -1: the camera's minimum
+        max_gain: -1                  # -1: the camera's maximum; = min_gain: no auto gain
+
+      # The camera's own UVC controls become parameters when it first connects,
+      # with its ranges and its current values as defaults; the node logs them
+      # all at startup. Set any of them here to apply it on every (re)connect:
+      # exposure_us: 10000            # applied in exposure_mode manual (100 us steps)
+      # gain: 32                      # applied in auto and manual
+      # auto_white_balance: true
+      # white_balance_temperature: 4600   # applied while auto_white_balance is false
+      # power_line_frequency: 1       # 0 off, 1 50 Hz, 2 60 Hz (camera's menu)
+      # exposure_dynamic_framerate: false
+      # brightness: 0
+      # contrast: 32
+      # saturation: 64
+      # hue: 0
+      # gamma: 100
+      # sharpness: 3
+      # backlight_compensation: 0
